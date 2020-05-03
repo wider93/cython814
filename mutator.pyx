@@ -6,6 +6,7 @@
 
 import xxhash
 cimport cython
+from cython.parallel import prange
 import numpy as np
 cimport numpy as np
 from libcpp.vector cimport vector
@@ -21,9 +22,8 @@ cdef vector[inttuple] dxdy = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -
 cdef int r = 8, c = 14, rc = 112 # r*c
 cdef int make_log = 1
 
-
 cdef char* foldername = b'storage'
-cdef char* log_name = b'log'
+cdef str log_name = 'log_'
 if not os.path.exists(foldername):
     os.makedirs(foldername)
 
@@ -34,7 +34,6 @@ cdef size_t frag_len = frag_path.size()
 DTYPE = np.int64
 ctypedef np.int64_t DTYPE_t
 hashing = xxhash.xxh32()
-
 
 ctypedef unsigned int uint
 
@@ -63,29 +62,40 @@ cdef void calc_map(int restrict = 1):
         grid_map.push_back(path)
 
 calc_map(1)
+np.random.seed(int(time()))
+
+cdef int bound_by_global_max = 1000
+cdef int bound_10 = 100
+
+cdef void renew_global_max(int k):
+    cdef int m
+    global bound_by_global_max, bound_10
+    m = (k + 49) // 50
+    if m > 10 and m > bound_10:
+        bound_10 = m
+        bound_by_global_max = m * 10
 
 @cython.boundscheck(False) # turn off bounds-checking for entire function
 @cython.wraparound(False)  # turn off negative index wrapping for entire function
 cdef int score(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef int current, x, nx, top, j
-    cdef size_t n, i
+    cdef size_t i
     cdef vector[vector[int]] first, second
     cdef vector[int] que, new_que
     cdef int[112] check
+    cdef int[10] fastcount
     first = [[] for j in range(10)]
     for x in range(rc):
         first[f[x]].push_back(x)
-    for current in range(1, 10):
-        if first[current].size() == 0:
-            return current - 1
+    for j in range(1, 10):
+        if not first[j].size():
+            return j - 1
     current = 9
-    for top in range(1, 10000):
+    for top in range(1, bound_10+1):
         second = [[] for i in range(10)]
         que = first[top]
-        for j in range(rc):
-            check[j] = 0
-        n = que.size()
-        for i in range(n):
+        for j in range(rc): check[j] = 0
+        for i in range(que.size()):
             for nx in grid_map[que[i]]:
                 if check[nx] == 0:
                     second[f[nx]].push_back(nx)
@@ -96,6 +106,21 @@ cdef int score(np.ndarray[DTYPE_t, ndim = 1] f):
                 return current
             current += 1
             first.push_back(new_que)
+
+    fastcount = [0]*10
+    for top in range(bound_10 + 1, bound_by_global_max):
+        for i in range(10): fastcount[i] = 0
+        for j in range(rc): check[j] = 0
+        que = first[top]
+        for i in range(que.size()):
+            for nx in grid_map[que[i]]:
+                if not check[nx]:
+                    fastcount[f[nx]] = 1
+                    check[nx] = 1
+        for i in range(10):
+            if not fastcount[i]:
+                return current
+            current += 1
 
 cdef int int_16(j):
     return int(j, 16)
@@ -138,6 +163,7 @@ cdef class Individual:
         zy = self.gene.reshape((r, c))
         a = '\n'.join(np.array2string(zyy, separator = '', prefix = '', suffix = '')[1:-1] for zyy in zy)
         return '\n'.join([f'ans:{self.grade}', a])
+
 
 
 # Generate with no input
@@ -194,16 +220,16 @@ cpdef np.ndarray push_some_row(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef np.ndarray[DTYPE_t, ndim = 1] g, x, rands
     cdef int i, a, b, p
     g = f.copy()
-    rands = rng.integers(3, size = c)
+    rands = rng.integers(3, size = r)
     for i in range(r):
         if rands[i] == 0:
             a = c * i
             b = a + c
             x = g[a:b]
             p = rng.integers(c)
-            x[p:-1] = x[p+1:]
+            x[p:c-1] = x[p+1:]
             p = rng.integers(c)
-            x[p+1:] = x[p:-1]
+            x[p+1:] = x[p:c-1]
             x[p] = rng.integers(10)
             g[a:b] = x
     return g
@@ -215,9 +241,7 @@ cpdef np.ndarray swap_in_row(np.ndarray[DTYPE_t, ndim = 1] f):
     for i in range(3):
         k = rng.integers(r)
         j = rng.integers(c*k, c*(k+1)-1)
-        tmp = g[j]
-        g[j] = g[j+1]
-        g[j+1] = tmp
+        g[j], g[j+1] = g[j+1], g[j]
     return g
 
 cpdef np.ndarray swap_in_col(np.ndarray[DTYPE_t, ndim = 1] f):
@@ -237,9 +261,7 @@ cpdef np.ndarray swap_next(np.ndarray[DTYPE_t, ndim = 1] f):
         j = rng.integers(rc)
         m = rng.integers(len(grid_map[j]))
         k = grid_map[j][m]
-        tmp = g[k]
-        g[k] = g[j]
-        g[j] = tmp
+        g[j], g[k] = g[k], g[j]
     return g
 
 cpdef np.ndarray shuffle_square(np.ndarray[DTYPE_t, ndim = 1] f):
@@ -384,16 +406,17 @@ cdef vector[int] stack_pop(list population):
 cdef class Race:
     cdef readonly int max_, prev_max_
     cdef readonly list population
-    cdef readonly str use_
+    cdef readonly str use_, log_
     def __init__(self, use = ''):
         population = []
+        renew_global_max(1000)
         if use:
             if not os.path.exists(use):
                 with open(use, 'w'):
                     pass
             with open(use, 'r') as file:
                 piles = file.readlines()
-                print(len(piles))
+                print(f"raw file lines: {len(piles)}")
                 m = r+1
                 for k in range(0, len(piles), m):
                     pile = piles[k+1:k+m]
@@ -410,8 +433,10 @@ cdef class Race:
         self.renew()
         print(f"neo_length = {len(population)}")
         self.population.sort(reverse = True)
-        self.prev_max_ = self.max_ = population[0].grade
+        self.prev_max_ = self.max_ = self.population[0].grade
+        renew_global_max(self.max_)
         print("initialize complete")
+        self.log_ = ''.join([log_name, use])
 
     cdef void progress(self):
         cdef set new_population
@@ -452,13 +477,14 @@ cdef class Race:
         # Now update population
         p_list = sorted(new_population)
         # First, pop best m candidates
-        self.population = p_list[-best_:]
+        self.population = p_list[:-best_-1:-1]
         p_list[-best_:] = []
         t = self.population[0].grade - self.max_
         if t > 0:
             self.max_ += t
+            renew_global_max(self.max_)
             if make_log:
-                with open(log_name, 'a') as file:
+                with open(self.log_, 'a') as file:
                     tmp = self.population[0]
                     file.writelines(str(tmp))
                     file.writelines('\n')
@@ -500,7 +526,7 @@ cdef class Race:
         for i in range(1000 - n):
             self.population.append(fully_new())
 
-    cpdef grow(self, uint epoch, int thres = 1000, uint show = 10, uint save_period = 400):
+    cpdef grow(self, uint epoch, int thres = 1000, uint show = 10, uint save_period = 200):
         cdef uint it
         cdef Individual x
         cdef double check
