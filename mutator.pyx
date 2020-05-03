@@ -30,14 +30,16 @@ if not os.path.exists(foldername):
 cdef vector[string] frag_path = os.listdir(foldername)
 cdef size_t frag_len = frag_path.size()
 
+# 32bit or 64bit
+DTYPE = np.int64
+ctypedef np.int64_t DTYPE_t
+hashing = xxhash.xxh64()
 
 
-ctypedef np.int_t DTYPE_t
 ctypedef unsigned int uint
 
 cdef vector[vector[int]] grid_map
 cdef vector[int] unused_points
-hashing = xxhash.xxh32()
 grid_map = []
 
 cdef void calc_map(int restrict = 1):
@@ -167,7 +169,7 @@ cpdef np.ndarray random_balance(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef np.ndarray[DTYPE_t, ndim = 1] g
     cdef int m
     m = rng.integers(10)
-    g = (f + np.arange(m, m + rc, dtype = np.int)) % 10
+    g = (f + np.arange(m, m + rc, dtype = DTYPE)) % 10
     np.random.shuffle(g)
     return g
 
@@ -247,7 +249,7 @@ cpdef np.ndarray shuffle_square(np.ndarray[DTYPE_t, ndim = 1] f):
     k = rng.integers(2, 5)
     a = rng.integers(r-k)
     b = rng.integers(c-k)
-    g1 = (np.arange(a, a+k, dtype = np.int).reshape((k, 1)) * c + np.arange(b, b+k, dtype = np.int).reshape((1, k))).reshape(-1)
+    g1 = (np.arange(a, a+k, dtype = DTYPE).reshape((k, 1)) * c + np.arange(b, b+k, dtype = DTYPE).reshape((1, k))).reshape(-1)
     g2 = g1.copy()
     np.random.shuffle(g1)
     g[g1] = g[g2]
@@ -255,7 +257,7 @@ cpdef np.ndarray shuffle_square(np.ndarray[DTYPE_t, ndim = 1] f):
 
 cpdef np.ndarray apply_permutation(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef np.ndarray[DTYPE_t, ndim = 1] perm, g
-    perm = np.arange(10, dtype = np.int)
+    perm = np.arange(10, dtype = DTYPE)
     np.random.shuffle(perm)
     g = perm[f]
     return g
@@ -313,10 +315,10 @@ cpdef np.ndarray replace_rect(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_
     k = rng.integers(2, 5)
     a = rng.integers(r-k)
     b = rng.integers(c-k)
-    g1 = (np.arange(a, a+k, dtype = np.int).reshape((k, 1)) * c + np.arange(b, b+k, dtype = np.int).reshape((1, k))).reshape(-1)
+    g1 = (np.arange(a, a+k, dtype = DTYPE).reshape((k, 1)) * c + np.arange(b, b+k, dtype = DTYPE).reshape((1, k))).reshape(-1)
     a = rng.integers(r-k)
     b = rng.integers(c-k)
-    g2 = (np.arange(a, a+k, dtype = np.int).reshape((k, 1)) * c + np.arange(b, b+k, dtype = np.int).reshape((1, k))).reshape(-1)
+    g2 = (np.arange(a, a+k, dtype = DTYPE).reshape((k, 1)) * c + np.arange(b, b+k, dtype = DTYPE).reshape((1, k))).reshape(-1)
     np.random.shuffle(g2)
     i = rng.integers(2)
     if i == 0:
@@ -403,12 +405,10 @@ cdef class Race:
             self.use_ = "save0.txt"
 
         n = len(population)
-        if n < 1000:
-            for i in range(1000 - n):
-                population.append(fully_new())
-        print(f"neo_length = {len(population)}")
-        population.sort(reverse = True)
         self.population = population
+        self.renew()
+        print(f"neo_length = {len(population)}")
+        self.population.sort(reverse = True)
         self.prev_max_ = self.max_ = population[0].grade
         print("initialize complete")
 
@@ -483,6 +483,22 @@ cdef class Race:
         self.max_ = self.population[0].grade
         print(f"MAX SCORE = {self.max_}")
 
+    cdef cutoff(self, int thres):
+        # bisect
+        cdef int mid, left = 0, right = 1000 # len(population)
+        while right > left + 1:
+            mid = (right + left) >> 1
+            if self.population[mid].grade >= thres:
+                left = mid
+            else:
+                right = mid
+        self.population[mid:] = []
+
+    cdef renew(self):
+        cdef int n = len(self.population)
+        for i in range(1000 - n):
+            self.population.append(fully_new())
+
     cpdef grow(self, uint epoch, int thres = 1000, uint show = 10, uint save_period = 400):
         cdef uint it
         cdef Individual x
@@ -495,13 +511,17 @@ cdef class Race:
             if it % show == 0:
                 print(f"epoch = {it}, max_score = {self.max_}, elapsed = {time() - check:.2f}s, num = {len(self.population)}")
                 if it % save_period == 0:
+                    self.population.sort(reverse = True)
+                    self.cutoff(thres)
                     if self.max_ > self.prev_max_:
                         print(f"previous max = {self.prev_max_}, now max = {self.max_}. Saving new values...")
                         with open(self.use_, 'w') as file:
                             for x in tqdm(self.population):
-                                if x.grade >= thres:
-                                    file.writelines(str(x))
-                                    file.writelines('\n')
+                                #if x.grade >= thres:  #already cut-off
+                                file.writelines(str(x))
+                                file.writelines('\n')
+
                         self.prev_max_ = self.max_
                         print("save complete.")
+                    self.renew()
                 check = time()
