@@ -33,7 +33,7 @@ cdef size_t frag_len = frag_path.size()
 # 32bit or 64bit
 DTYPE = np.int64
 ctypedef np.int64_t DTYPE_t
-hashing = xxhash.xxh64()
+hashing = xxhash.xxh32()
 
 
 ctypedef unsigned int uint
@@ -103,12 +103,12 @@ cdef int int_16(j):
 cdef np.ndarray parse_to_array(list note):
     cdef str liststring = ''.join(note)
     #assert len(liststring) == rc
-    return np.array([int_16(j) for j in liststring])
+    return np.array([int_16(j) for j in liststring], dtype = DTYPE)
 
 cdef class Individual:
     cdef readonly int grade
     cdef public np.ndarray gene
-    cdef readonly unsigned hash
+    cdef readonly unsigned long hash
     def __init__(self, np.ndarray[DTYPE_t, ndim = 1] f):
         self.gene = f
         self.grade = score(f)
@@ -369,7 +369,8 @@ generators_pool2, generators_weight2 = generate_table(table2)
 
 cdef vector[int] stack_pop(list population):
     cdef Individual ele
-    cdef int a = 0, n
+    cdef int a = 0
+    cdef size_t n
     cdef vector[int] stack
     n = len(population)
     #n = 1000
@@ -391,14 +392,14 @@ cdef class Race:
                 with open(use, 'w'):
                     pass
             with open(use, 'r') as file:
-                for __ in range(1000):
-                    try:
-                        pile = [file.readline() for _ in range(r + 1)]
-                        one = [row.rstrip() for row in pile[1:]]
-                        two = Individual(parse_to_array(one))
-                        population.append(two)
-                    except:
-                        break
+                piles = file.readlines()
+                print(len(piles))
+                m = r+1
+                for k in range(0, len(piles), m):
+                    pile = piles[k+1:k+m]
+                    one = [row.rstrip() for row in pile]
+                    two = Individual(parse_to_array(one))
+                    population.append(two)
             print(f"length = {len(population)}")
             self.use_ = use
         else:
