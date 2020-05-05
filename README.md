@@ -11,7 +11,7 @@ Language:
 * Python 3.8.2
 
 Libraries:
-* Cython 0.29.17
+* cython 0.29.17
 * numpy 0.18.4
 * xxhash 1.4.3
 * tqdm 4.46
