@@ -1,6 +1,6 @@
 # cython814
 
-This project is to solve a [specific problem](boj.kr/18789).
+This project is to solve a [specific problem](http://boj.kr/18789).
 
 ## Getting Started
 
