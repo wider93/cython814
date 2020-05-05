@@ -2,11 +2,7 @@
 
 This project is to solve a [specific problem](http://boj.kr/18789). Still in progress
 
-## Getting Started
-
-These instructions will get you a copy of the project up and running on your local machine for development and testing purposes. See deployment for notes on how to deploy the project on a live system.
-
-### Prerequisites
+## Prerequisites
 Language:
 * Python 3.8.2
 
@@ -16,7 +12,7 @@ Libraries:
 * xxhash 1.4.3
 * tqdm 4.46
 
-### Installing
+## How to run
 
 type 
 ```
