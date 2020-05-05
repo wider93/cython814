@@ -16,10 +16,6 @@ Libraries:
 * xxhash 1.4.3
 * tqdm 4.46
 
-```
-Give examples
-```
-
 ### Installing
 
 type 
