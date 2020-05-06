@@ -6,11 +6,11 @@
 
 import xxhash
 cimport cython
-from cython.parallel import prange
 import numpy as np
 cimport numpy as np
 from libcpp.vector cimport vector
 from libcpp.string cimport string
+from libc.stdlib cimport malloc, free
 from time import time
 from tqdm import tqdm
 import random
@@ -23,6 +23,7 @@ cdef int r = 8, c = 14, rc = 112 # r*c
 cdef int make_log = 1
 
 cdef char* foldername = b'storage'
+cdef char* usedindexname = b'used.txt'
 cdef str log_name = 'log_'
 if not os.path.exists(foldername):
     os.makedirs(foldername)
@@ -36,31 +37,61 @@ ctypedef np.int64_t DTYPE_t
 hashing = xxhash.xxh32()
 
 ctypedef unsigned int uint
+ctypedef long long lld
+
+'''cdef extern from "cfunc.cpp":
+    # C++ is include here so that it doesn't need to be compiled externally
+    pass
+cdef extern from "cfunc.h":
+    cdef vector[vector[int]] vecvec(int size)'''
+
+'''cdef vector[vector[int]] vecvec(int size):
+    cdef vector[vector[int]] ans = []
+    cdef vector[int] tmp
+    ans.reserve(size)
+    cdef int i
+    for i in range(size):
+        tmp = []
+        ans.push_back(tmp)
+    return ans'''
+
 
 cdef vector[vector[int]] grid_map
 cdef vector[int] unused_points
+cdef int *used = <int *>malloc(rc * sizeof(int))
 grid_map = []
 
+cdef void fix_used():
+    global used, unused_points
+    cdef int i
+    cdef str line, j
+    assert os.path.exists(usedindexname)
+    with open(usedindexname, 'r') as file:
+        line = file.readline().rstrip()
+        for i, j in enumerate(line):
+            used[i] = int(j)
+
+    for m in range(rc):
+        if not used[m]:
+            unused_points.push_back(m)
+
 cdef void calc_map(int restrict = 1):
-    cdef int x, y, nx, ny, i, j
+    cdef int x, y, nx, ny, i, j, m
     cdef vector[int] path
-    global grid_map, unused_points
+    global grid_map
     grid_map = []
-    unused_points = []
     for m in range(rc):
         path = []
-        if restrict == 0 and rng.integers(10) >= 7:
-            unused_points.push_back(m)
-        else:
-            x = m // c
-            y = m % c
-            for i, j in dxdy:
-                nx = x + i
-                ny = y + j
-                if 0 <= nx < r and 0 <= ny < c:
-                    path.push_back(c*nx+ny)
+        x = m // c
+        y = m % c
+        for i, j in dxdy:
+            nx = x + i
+            ny = y + j
+            if 0 <= nx < r and 0 <= ny < c:
+                path.push_back(c*nx+ny)
         grid_map.push_back(path)
 
+fix_used()
 calc_map(1)
 np.random.seed(int(time()))
 
@@ -77,66 +108,70 @@ cdef void renew_global_max(int k):
 
 @cython.boundscheck(False) # turn off bounds-checking for entire function
 @cython.wraparound(False)  # turn off negative index wrapping for entire function
-cdef int score(np.ndarray[DTYPE_t, ndim = 1] f):
+cdef int score(lld [:] f):
     cdef int current, x, nx, top, j
     cdef size_t i
     cdef vector[vector[int]] first, second
     cdef vector[int] que, new_que
     cdef int[112] check
     cdef int[10] fastcount
-    first = [[] for j in range(10)]
+    first = [[] for i in range(10)]#vecvec(10)
     for x in range(rc):
         first[f[x]].push_back(x)
     for j in range(1, 10):
         if not first[j].size():
             return j - 1
     current = 9
+
+    for j in range(rc): check[j] = 0
     for top in range(1, bound_10+1):
-        second = [[] for i in range(10)]
-        que = first[top]
-        for j in range(rc): check[j] = 0
-        for i in range(que.size()):
-            for nx in grid_map[que[i]]:
-                if check[nx] == 0:
-                    second[f[nx]].push_back(nx)
-                    check[nx] = 1
+        second = [[] for i in range(10)]#vecvec(10)
+        with nogil:
+            que = first[top]
+            for i in range(que.size()):
+                for nx in grid_map[que[i]]:
+                    if check[nx] == 0:
+                        second[f[nx]].push_back(nx)
+                        check[nx] = 1
         for i in range(10):
             new_que = second[i]
             if new_que.size() == 0:
                 return current
+            for j in new_que: check[j] = 0
             current += 1
             first.push_back(new_que)
 
     fastcount = [0]*10
     for top in range(bound_10 + 1, bound_by_global_max):
-        for i in range(10): fastcount[i] = 0
-        for j in range(rc): check[j] = 0
-        que = first[top]
-        for i in range(que.size()):
-            for nx in grid_map[que[i]]:
-                if not check[nx]:
-                    fastcount[f[nx]] = 1
-                    check[nx] = 1
+        with nogil:
+            for i in range(10): fastcount[i] = 0
+            for j in range(rc): check[j] = 0
+            que = first[top]
+            for i in range(que.size()):
+                for nx in grid_map[que[i]]:
+                    if not check[nx]:
+                        fastcount[f[nx]] = 1
+                        check[nx] = 1
         for i in range(10):
             if not fastcount[i]:
                 return current
             current += 1
 
 cdef int int_16(j):
-    return int(j, 16)
+    return int(j) if j != 'a' else rng.integers(10)
 
 cdef np.ndarray parse_to_array(list note):
     cdef str liststring = ''.join(note)
-    #assert len(liststring) == rc
     return np.array([int_16(j) for j in liststring], dtype = DTYPE)
 
 cdef class Individual:
     cdef readonly int grade
     cdef public np.ndarray gene
     cdef readonly unsigned long hash
+
     def __init__(self, np.ndarray[DTYPE_t, ndim = 1] f):
         self.gene = f
-        self.grade = score(f)
+        self.grade = score(self.gene)
         hashing.update(f)
         self.hash = hashing.intdigest()
         hashing.reset()
@@ -171,7 +206,7 @@ cdef class Individual:
 cpdef Individual fully_new():
     return Individual(rng.integers(10, size = rc))
 
-cpdef Individual read_from_file():
+cpdef np.ndarray read_from_file():
     cdef size_t i
     cdef string use
     cdef list pile, one
@@ -179,18 +214,23 @@ cpdef Individual read_from_file():
     cdef np.ndarray[DTYPE_t, ndim = 1] two
     if frag_len == 0:
         return fully_new()
-    i = rng.integers(frag_len)
-    use = frag_path[i]
-    with open(use, 'r') as file:
+    j = rng.integers(frag_len)
+    use = frag_path[j]
+    with open(os.path.join(foldername, use), 'r') as file:
         pile = file.readlines()
         one = [row.rstrip() for row in pile[1:]]
         two = parse_to_array(one) # Note: Here we assume unassigned values are stored in one letter, i.e. 'a'
-    for j in range(rc):
-        if not 0 <= two[j] < 10:
-            two[j] = rng.integers(10)
-    return Individual(two)
+    return two
+
+cdef Individual random_new():
+    cdef int k = rng.integers(5)
+    if k:
+        return Individual(read_from_file())
+    return fully_new()
 
 # Using one
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray random_balance(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef np.ndarray[DTYPE_t, ndim = 1] g
     cdef int m
@@ -199,7 +239,8 @@ cpdef np.ndarray random_balance(np.ndarray[DTYPE_t, ndim = 1] f):
     np.random.shuffle(g)
     return g
 
-
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray mutate_some(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef np.ndarray[DTYPE_t, ndim = 1] g
     cdef size_t num
@@ -208,6 +249,8 @@ cpdef np.ndarray mutate_some(np.ndarray[DTYPE_t, ndim = 1] f):
     g[np.random.choice(rc, num)] = rng.integers(10, size = num)
     return g
 
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray mutate_more(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef np.ndarray[DTYPE_t, ndim = 1] g
     cdef size_t num
@@ -217,23 +260,26 @@ cpdef np.ndarray mutate_more(np.ndarray[DTYPE_t, ndim = 1] f):
     return g
 
 cpdef np.ndarray push_some_row(np.ndarray[DTYPE_t, ndim = 1] f):
-    cdef np.ndarray[DTYPE_t, ndim = 1] g, x, rands
+    cdef np.ndarray[DTYPE_t, ndim = 1] g, x, rands, px
     cdef int i, a, b, p
     g = f.copy()
     rands = rng.integers(3, size = r)
+    px = rng.integers(c, size = 2*r)
     for i in range(r):
         if rands[i] == 0:
             a = c * i
             b = a + c
             x = g[a:b]
-            p = rng.integers(c)
+            p = px[2*i]
             x[p:c-1] = x[p+1:]
-            p = rng.integers(c)
+            p = px[2*i+1]
             x[p+1:] = x[p:c-1]
             x[p] = rng.integers(10)
             g[a:b] = x
     return g
 
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray swap_in_row(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef np.ndarray[DTYPE_t, ndim = 1] g
     cdef int i, k, j, tmp
@@ -244,6 +290,8 @@ cpdef np.ndarray swap_in_row(np.ndarray[DTYPE_t, ndim = 1] f):
         g[j], g[j+1] = g[j+1], g[j]
     return g
 
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray swap_in_col(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef np.ndarray[DTYPE_t, ndim = 1] g
     cdef int j
@@ -252,6 +300,8 @@ cpdef np.ndarray swap_in_col(np.ndarray[DTYPE_t, ndim = 1] f):
         g[j], g[j+c] = g[j+c], g[j]
     return g
 
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray swap_next(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef np.ndarray[DTYPE_t, ndim = 1] g
     cdef int i, j, k, n, m, tmp
@@ -264,6 +314,8 @@ cpdef np.ndarray swap_next(np.ndarray[DTYPE_t, ndim = 1] f):
         g[j], g[k] = g[k], g[j]
     return g
 
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray shuffle_square(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef np.ndarray[DTYPE_t, ndim = 1] g, g1, g2
     cdef int a, b, k
@@ -277,6 +329,8 @@ cpdef np.ndarray shuffle_square(np.ndarray[DTYPE_t, ndim = 1] f):
     g[g1] = g[g2]
     return g
 
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray apply_permutation(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef np.ndarray[DTYPE_t, ndim = 1] perm, g
     perm = np.arange(10, dtype = DTYPE)
@@ -284,53 +338,132 @@ cpdef np.ndarray apply_permutation(np.ndarray[DTYPE_t, ndim = 1] f):
     g = perm[f]
     return g
 
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
+cpdef np.ndarray force_next(np.ndarray[DTYPE_t, ndim = 1] f):
+    cdef int current, x, nx, top, j
+    cdef size_t i, ii, iii, m, mi, a
+    cdef np.ndarray[DTYPE_t, ndim = 1] g
+    cdef vector[vector[int]] first, second
+    cdef vector[int] que, new_que
+    cdef int[112] check
+    cdef const lld[:] view = f
+    first = [[] for i in range(10)]#vecvec(10)
+    for x in range(rc):
+        first[view[x]].push_back(x)
+    for j in range(1, 10):
+        if not first[j].size():
+            return rng.integers(10, size = rc)
+
+    for j in range(rc): check[j] = 0
+    current = 9
+    g = f.copy()
+    for top in range(1, bound_by_global_max):
+        second = [[] for i in range(10)]#vecvec(10)
+        with nogil:
+            que = first[top]
+            for j in que:
+                for nx in grid_map[j]:
+                    if check[nx] == 0:
+                        second[view[nx]].push_back(nx)
+                        check[nx] = 1
+            for i in range(10):
+                new_que = second[i]
+                if new_que.size() == 0:
+                    m = 0
+                    for iii in range(10):
+                        mi = second[iii].size()
+                        if mi > m:
+                            m = mi
+                            ii = iii
+                    with gil:
+                        j = rng.integers(m)
+                        a = second[ii][j]
+                        g[a] = i
+                        return g
+                current += 1
+                for j in new_que:
+                    check[j] = 0
+                if top <= bound_10:
+                    first.push_back(new_que)
+    return f # just in case
+
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
+cpdef np.ndarray another_template(np.ndarray[DTYPE_t, ndim = 1] f):
+    cdef np.ndarray[DTYPE_t, ndim = 1] h
+    cdef lld[:] view
+    cdef int[56] rand
+    cdef int i
+    h = read_from_file()
+    view = h
+    with nogil:
+        for i in unused_points:
+            view[i] = f[i]
+    return h
 
 
-table = [(mutate_some, 0.1 ), (apply_permutation, 0.4), (mutate_more, 1.0), (push_some_row, 1.0),
-         (shuffle_square, 1.5), (swap_in_col, .5), (swap_in_row, .5), (swap_next, .5), (random_balance, .5), ]
+table = [(mutate_some, 0.1 ), (apply_permutation, 0.4), (mutate_more, 0.6), (push_some_row, 1.0), (force_next, 1.),
+         (shuffle_square, 1.4), (swap_in_col, .5), (swap_in_row, .5), (swap_next, .5), (random_balance, .5), (another_template, .5)]
 
 # List of functions which takes 2 arguments
 
-
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray split_row(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_t, ndim = 1] g):
     cdef np.ndarray[DTYPE_t, ndim = 1] h
-    cdef int a, b, i
+    cdef lld[:] view
+    cdef int a, b, i, j, x, y
     h = f.copy()
+    view = h
     a = rng.integers(2)
     b = rng.integers(1, c)
     if a == 0:
-        for i in range(b, c):
-            h[i::c] = g[i::c]
+        x, y = b, c
     else:
-        for i in range(b):
-            h[i::c] = g[i::c]
+        x, y = 0, b
+    for i in range(x, y):
+        for j in range(i, rc, c):
+            view[j] = g[j]
     return h
 
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray split_col(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_t, ndim = 1] g):
     cdef np.ndarray[DTYPE_t, ndim = 1] h
-    cdef int a, b
+    cdef int a, b, j, x, y
+    cdef lld[:] view
     h = f.copy()
+    view = h
     a = rng.integers(2)
     b = rng.integers(1, r)*c
     if a == 0:
-        h[b:] = g[b:]
+        x, y = b, c
     else:
-        h[:b] = g[:b]
+        x, y = 0, b
+    for j in range(x, y):
+        view[j] = g[j]
     return h
 
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray flavor(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_t, ndim = 1] g):
     cdef np.ndarray[DTYPE_t, ndim = 1] h
     cdef int[14] x
     cdef int a, b
+    cdef lld[:] view
     h = f.copy()
+    view = h
     b = rng.integers(rc)
-    x = rng.integers(r, size = 14)
+    x = rng.integers(r, size = c)
     for i in range(c):
         a = c*x[i]+i+b
         if a >= rc: a -= rc
-        h[a] = g[a]
+        view[a] = g[a]
     return h
 
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray replace_rect(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_t, ndim = 1] g):
     cdef np.ndarray[DTYPE_t, ndim = 1] h, g1, g2
     cdef int a, b, k, i
@@ -351,32 +484,35 @@ cpdef np.ndarray replace_rect(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_
         h[g1] = f[g2]
     return h
 
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray pairing(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_t, ndim = 1] g):
     cdef np.ndarray[DTYPE_t, ndim = 1] h
-    h = f.copy()
+    cdef lld[:] view
     cdef int[56] rand
-    cdef int i
+    cdef int i, j
+    h = f.copy()
+    view = h
     rand = rng.integers(2, size = rc//2)
     for i in range(rc//2):
-        if rand[i] == 0:
-            h[2 * i + 1] = g[2 * i + 1]
-        else:
-            h[2 * i] = g[2 * i]
+        j = 2*i+rand[i]
+        view[j] = g[j]
     return h
-
 
 cpdef np.ndarray add(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_t, ndim = 1] g):
     cdef np.ndarray[DTYPE_t, ndim = 1] h
     h = (f + g[rc-1::-1]) % 10
     return h
 
-table2 = [(split_col, 1.), (split_row, 1.), (flavor, 1.), (replace_rect, 1.), (pairing, 1.), (add, 1.)]
+table2 = [(split_col, 1.), (split_row, .7), (flavor, .6), (replace_rect, 1.), (pairing, 1.), (add, .7)]
 
 
-cdef generate_table(table):
+cdef generate_table(list table):
     cdef list pool = []
     cdef vector[float] cum_weights = []
-    cdef float accumulated = 0.
+    cdef float accumulated = 0., weight
+    cdef n = len(table)
+    cum_weights.reserve(n)
     for func, weight in table:
         accumulated += weight
         pool.append(func)
@@ -428,6 +564,7 @@ cdef class Race:
         else:
             self.use_ = "save0.txt"
 
+        print(f"using {self.use_}")
         n = len(population)
         self.population = population
         self.renew()
@@ -500,7 +637,7 @@ cdef class Race:
 
         # Always generate some fresh meat
         for a in range(rands_):
-            self.population.append(fully_new())
+            self.population.append(random_new())
 
     cdef recalc_elements(self, int level):
         cdef Individual ele
@@ -536,7 +673,7 @@ cdef class Race:
             self.progress()
 
             if it % show == 0:
-                print(f"epoch = {it}, max_score = {self.max_}, elapsed = {time() - check:.2f}s, num = {len(self.population)}")
+                print(f"epoch = {it:<5}, max_score = {self.max_:<4}, elapsed = {time() - check:.2f}s, num = {len(self.population)}")
                 if it % save_period == 0:
                     self.population.sort(reverse = True)
                     self.cutoff(thres)
@@ -551,4 +688,5 @@ cdef class Race:
                         self.prev_max_ = self.max_
                         print("save complete.")
                     self.renew()
+                    np.random.seed(int(check))
                 check = time()
