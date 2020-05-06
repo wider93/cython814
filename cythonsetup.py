@@ -9,7 +9,7 @@ import numpy
 setup(
     name='Evolutionary Algorithm',
     description = 'A code to solve 814-2 using Cython-module',
-    ext_modules=cythonize('mutator.pyx', annotate = True),
+    ext_modules=cythonize('mutator_partof.pyx', annotate = True, language_level=3),
     include_dirs=[numpy.get_include()]
 )
 
