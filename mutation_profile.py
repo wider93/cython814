@@ -11,9 +11,10 @@ while os.path.exists(f"pf/Profile{i}.prof"):
 
 profile_name = f"pf/Profile{i}.prof"
 
-import mutator
+import mutator_partof as M
 
-cProfile.runctx("x = mutator.Race(use = 'save1.txt'); x.grow(200, thres = 1000, show = 10)", globals(), locals(), profile_name)
+cProfile.runctx("x = M.Race(use = 'save2.txt'); x.grow(2000, thres = 550, show = 10, save_period = 500)", globals(), locals(), profile_name)
+#cProfile.runctx("x = M.Race(use = 'save0.txt'); x.grow(50, thres = 1000, show = 10, save_period = 50)", globals(), locals(), profile_name)
 
 s = pstats.Stats(profile_name)
 s.strip_dirs().sort_stats("time").print_stats()
