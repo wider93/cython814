@@ -39,23 +39,6 @@ hashing = xxhash.xxh32()
 ctypedef unsigned int uint
 ctypedef long long lld
 
-'''cdef extern from "cfunc.cpp":
-    # C++ is include here so that it doesn't need to be compiled externally
-    pass
-cdef extern from "cfunc.h":
-    cdef vector[vector[int]] vecvec(int size)'''
-
-'''cdef vector[vector[int]] vecvec(int size):
-    cdef vector[vector[int]] ans = []
-    cdef vector[int] tmp
-    ans.reserve(size)
-    cdef int i
-    for i in range(size):
-        tmp = []
-        ans.push_back(tmp)
-    return ans'''
-
-
 cdef vector[vector[int]] grid_map
 cdef vector[int] unused_points
 cdef int *used = <int *>malloc(rc * sizeof(int))
@@ -78,13 +61,15 @@ cdef void fix_used():
 cdef void calc_map(int restrict = 1):
     cdef int x, y, nx, ny, i, j, m
     cdef vector[int] path
+    cdef inttuple par
     global grid_map
     grid_map = []
     for m in range(rc):
         path = []
         x = m // c
         y = m % c
-        for i, j in dxdy:
+        for par in dxdy:
+            i, j = par
             nx = x + i
             ny = y + j
             if 0 <= nx < r and 0 <= ny < c:
@@ -438,7 +423,7 @@ cpdef np.ndarray split_col(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_t, 
     a = rng.integers(2)
     b = rng.integers(1, r)*c
     if a == 0:
-        x, y = b, c
+        x, y = b, rc
     else:
         x, y = 0, b
     for j in range(x, y):
@@ -499,6 +484,8 @@ cpdef np.ndarray pairing(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_t, nd
         view[j] = g[j]
     return h
 
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray add(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_t, ndim = 1] g):
     cdef np.ndarray[DTYPE_t, ndim = 1] h
     h = (f + g[rc-1::-1]) % 10
@@ -639,7 +626,7 @@ cdef class Race:
         for a in range(rands_):
             self.population.append(random_new())
 
-    cdef recalc_elements(self, int level):
+    cdef void recalc_elements(self, int level): # Not used currently
         cdef Individual ele
         calc_map(level)
         self.population = [Individual(ele.gene) for ele in self.population]
@@ -647,7 +634,7 @@ cdef class Race:
         self.max_ = self.population[0].grade
         print(f"MAX SCORE = {self.max_}")
 
-    cdef cutoff(self, int thres):
+    cdef void cutoff(self, int thres):
         # bisect
         cdef int mid, left = 0, right = 1000 # len(population)
         while right > left + 1:
@@ -658,12 +645,12 @@ cdef class Race:
                 right = mid
         self.population[mid:] = []
 
-    cdef renew(self):
+    cdef void renew(self):
         cdef int n = len(self.population)
         for i in range(1000 - n):
             self.population.append(fully_new())
 
-    cpdef grow(self, uint epoch, int thres = 1000, uint show = 10, uint save_period = 200):
+    cdef void grow(self, uint epoch, int thres = 1000, uint show = 10, uint save_period = 200):
         cdef uint it
         cdef Individual x
         cdef double check
@@ -673,7 +660,7 @@ cdef class Race:
             self.progress()
 
             if it % show == 0:
-                print(f"epoch = {it:<5}, max_score = {self.max_:<4}, elapsed = {time() - check:.2f}s, num = {len(self.population)}")
+                print(f"epoch = {it:<5}|max_score = {self.max_:<4}|elapsed = {time() - check:.2f}s|num = {len(self.population)}")
                 if it % save_period == 0:
                     self.population.sort(reverse = True)
                     self.cutoff(thres)
