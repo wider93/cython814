@@ -1,7 +1,3 @@
-# cython: profile=True
-# cython: linetrace=True
-# cython: binding=True
-# distutils: define_macros=CYTHON_TRACE_NOGIL=1
 # distutils: language=c++
 
 '''
@@ -79,7 +75,6 @@ cdef void calc_map(int restrict = 1):
     cdef inttuple par
     global grid_map, unused_points, used_points
     grid_map = []
-    unused_points = []
     for m in range(rc):
         path = []
         if restrict or used[m] == 1:
@@ -175,7 +170,7 @@ cdef int long_term_score(lld [:] f):
     first = [[] for j in range(10)]
     for x in used_points:
         first[f[x]].push_back(x)
-    for j in range(1, 10):
+    for j in range(10):
         if first[j].size():
             ans += 1
     current = 9
@@ -196,7 +191,7 @@ cdef int long_term_score(lld [:] f):
         for i in range(10):
             new_que = second[i]
             if new_que.size():
-                ans += 3 if i == top else 2
+                ans += 4 if (i == top or i == 0) else 2
             first.push_back(new_que)
     fastcount = [0]*10
     for top in range(10, 100):
@@ -363,6 +358,13 @@ cpdef np.ndarray apply_permutation(np.ndarray[DTYPE_t, ndim = 1] f):
 
 @cython.boundscheck(False) # turn off bounds-checking for entire function
 @cython.wraparound(False)  # turn off negative index wrapping for entire function
+cdef int choose(vector[int] pool):
+    cdef int n = pool.size()
+    cdef int k = rng.integers(n)
+    return pool[k]
+
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray force_next(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef int current, x, nx, top, j, mx
     cdef size_t i, ii, iii, m, mi, a, s
@@ -374,7 +376,7 @@ cpdef np.ndarray force_next(np.ndarray[DTYPE_t, ndim = 1] f):
     g = f.copy()
     for x in used_points:
         first[f[x]].push_back(x)
-    for j in range(1, 10):
+    for j in range(10):
         if not first[j].size():
             return rng.integers(10, size = rc)
 
@@ -391,15 +393,21 @@ cpdef np.ndarray force_next(np.ndarray[DTYPE_t, ndim = 1] f):
                     second[f[nx]].push_back(nx)
                     check[nx] = 1
         if s <= 10:
-            m = 0
-            mx = first[top//10][rng.integers(first[top//10].size())]
+            mx = choose(first[top//10])
             new_que = grid_map[mx]
-            a = new_que[rng.integers(new_que.size())]
+            a = choose(new_que)
             g[a] = top % 10
             return g
         for i in range(10):
             new_que = second[i]
             if new_que.size() == 0:
+                mx = rng.integers(2)
+                if mx == 0:
+                    mx = choose(que)
+                    new_que = grid_map[mx]
+                    a = choose(new_que)
+                    g[a] = top % 10
+                    return g
                 m = 0
                 for iii in range(10):
                     mi = second[iii].size()
@@ -515,7 +523,7 @@ cpdef np.ndarray add(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_t, ndim =
 table2 = [(split_col, 1.), (split_row, 1.), (flavor, 1.), (replace_rect, 1.), (pairing, 1.), (add, 1.)]
 
 
-cdef (list, vector[float]) generate_table(table):
+cdef generate_table(table):
     cdef list pool = []
     cdef vector[float] cum_weights = []
     cdef float accumulated = 0., weight
@@ -552,7 +560,7 @@ cdef class Race:
     def __init__(self, use = ''):
         renew_global_max(1000) # No danger while loading
         population = []
-        self.use_ = use = "save_longterm2.txt"
+        self.use_ = use = "save_longterm.txt"
         if not os.path.exists(use):
             with open(use, 'w'):
                 pass
@@ -581,7 +589,7 @@ cdef class Race:
 
     cdef void progress(self):
         cdef set new_population
-        cdef int t, a, n = 200, best_ = 150, survives_ = 750, rands_ = 100
+        cdef int t, a, n = 200, best_ = 75, survives_ = 825, rands_ = 100
         cdef list p_list, q, generators, generators2
         cdef np.ndarray[np.double_t, ndim = 1] prob
         cdef np.ndarray[DTYPE_t, ndim = 1] tmp2
@@ -667,7 +675,7 @@ cdef class Race:
         for i in range(1000 - n):
             self.population.append(fully_new())
 
-    cdef void grow(self, uint epoch, int thres = 1000, uint show = 10, uint save_period = 200):
+    cpdef void grow(self, uint epoch, int thres = 1000, uint show = 10, uint save_period = 200):
         cdef uint it, kk
         cdef Individual x
         cdef double check

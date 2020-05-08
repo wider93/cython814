@@ -1,8 +1,5 @@
-# cython: profile=True
-# cython: linetrace=True
-# cython: binding=True
-# distutils: define_macros=CYTHON_TRACE_NOGIL=1
 # distutils: language=c++
+
 
 import xxhash
 cimport cython
@@ -15,6 +12,14 @@ from time import time
 from tqdm import tqdm
 import random
 import os
+
+cdef extern from "stdlib.h":
+    cdef int rand()
+
+cdef int randrange(int x):
+    cdef int k = rand()
+    return k % x
+
 
 rng = np.random.default_rng()
 ctypedef (int, int) inttuple
@@ -143,7 +148,7 @@ cdef int score(lld [:] f):
             current += 1
 
 cdef int int_16(j):
-    return int(j) if j != 'a' else rng.integers(10)
+    return int(j) if j != 'a' else randrange(10)
 
 cdef np.ndarray parse_to_array(list note):
     cdef str liststring = ''.join(note)
@@ -191,6 +196,30 @@ cdef class Individual:
 cpdef Individual fully_new():
     return Individual(rng.integers(10, size = rc))
 
+cdef int[112] block_pos
+cdef void set_block():
+    global block_pos
+    cdef int k1, k2, j, a = 0
+    for k1 in range(0, rc, 2*c):
+        for k2 in range(k1, k1+c, 2):
+            block_pos[a] = k2
+            block_pos[a+1] = k2+1
+            block_pos[a+2] = k2+c
+            block_pos[a+3] = k2+c+1
+            a += 4
+set_block() # do not erase
+
+
+cpdef np.ndarray block_(): # fill with 2*2 block
+    cdef const lld[:] rand
+    cdef np.ndarray[DTYPE_t, ndim = 1] ans = np.empty(rc, dtype = DTYPE)
+    cdef int k, j
+    rand = rng.integers(10, size = rc >> 2)
+    for k in range(rc >> 2):
+        for j in range(k<<2, (k+1)<<2):
+            ans[block_pos[j]] = rand[k]
+    return ans
+
 cpdef np.ndarray read_from_file():
     cdef size_t i
     cdef string use
@@ -199,7 +228,7 @@ cpdef np.ndarray read_from_file():
     cdef np.ndarray[DTYPE_t, ndim = 1] two
     if frag_len == 0:
         return fully_new()
-    j = rng.integers(frag_len)
+    j = randrange(frag_len)
     use = frag_path[j]
     with open(os.path.join(foldername, use), 'r') as file:
         pile = file.readlines()
@@ -208,10 +237,12 @@ cpdef np.ndarray read_from_file():
     return two
 
 cdef Individual random_new():
-    cdef int k = rng.integers(5)
-    if k:
-        return Individual(read_from_file())
-    return fully_new()
+    cdef int k = randrange(6)
+    if k == 5:
+        return Individual(block_())
+    elif k == 0:
+        return fully_new()
+    return Individual(read_from_file())
 
 # Using one
 @cython.boundscheck(False) # turn off bounds-checking for entire function
@@ -219,7 +250,7 @@ cdef Individual random_new():
 cpdef np.ndarray random_balance(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef np.ndarray[DTYPE_t, ndim = 1] g
     cdef int m
-    m = rng.integers(10)
+    m = randrange(10)
     g = (f + np.arange(m, m + rc, dtype = DTYPE)) % 10
     np.random.shuffle(g)
     return g
@@ -230,7 +261,7 @@ cpdef np.ndarray mutate_some(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef np.ndarray[DTYPE_t, ndim = 1] g
     cdef size_t num
     g = f.copy()
-    num = rng.integers(1, 3)
+    num = 1 + randrange(2)
     g[np.random.choice(rc, num)] = rng.integers(10, size = num)
     return g
 
@@ -240,26 +271,27 @@ cpdef np.ndarray mutate_more(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef np.ndarray[DTYPE_t, ndim = 1] g
     cdef size_t num
     g = f.copy()
-    num = rng.integers(1, 5)
+    num = 1 + randrange(4)
     g[np.random.choice(rc, num)] = rng.integers(10, size = num)
     return g
 
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray push_some_row(np.ndarray[DTYPE_t, ndim = 1] f):
-    cdef np.ndarray[DTYPE_t, ndim = 1] g, x, rands, px
+    cdef np.ndarray[DTYPE_t, ndim = 1] g, x, rands
     cdef int i, a, b, p
     g = f.copy()
     rands = rng.integers(3, size = r)
-    px = rng.integers(c, size = 2*r)
     for i in range(r):
         if rands[i] == 0:
             a = c * i
             b = a + c
             x = g[a:b]
-            p = px[2*i]
-            x[p:c-1] = x[p+1:]
-            p = px[2*i+1]
-            x[p+1:] = x[p:c-1]
-            x[p] = rng.integers(10)
+            p = randrange(c)
+            x[p:c-1] = x[p+1:c]
+            p = randrange(c)
+            x[p+1:c] = x[p:c-1]
+            x[p] = randrange(10)
             g[a:b] = x
     return g
 
@@ -270,8 +302,8 @@ cpdef np.ndarray swap_in_row(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef int i, k, j, tmp
     g = f.copy()
     for i in range(3):
-        k = rng.integers(r)
-        j = rng.integers(c*k, c*(k+1)-1)
+        k = randrange(r)
+        j = c*k + randrange(c-1)
         g[j], g[j+1] = g[j+1], g[j]
     return g
 
@@ -288,13 +320,14 @@ cpdef np.ndarray swap_in_col(np.ndarray[DTYPE_t, ndim = 1] f):
 @cython.boundscheck(False) # turn off bounds-checking for entire function
 @cython.wraparound(False)  # turn off negative index wrapping for entire function
 cpdef np.ndarray swap_next(np.ndarray[DTYPE_t, ndim = 1] f):
-    cdef np.ndarray[DTYPE_t, ndim = 1] g
+    cdef np.ndarray[DTYPE_t, ndim = 1] g, h
     cdef int i, j, k, n, m, tmp
     g = f.copy()
-    n = rng.integers(2, 6)
+    n = 2 + randrange(4)
+    h = rng.integers(rc, size = n)
     for i in range(n):
-        j = rng.integers(rc)
-        m = rng.integers(len(grid_map[j]))
+        j = h[i]
+        m = randrange(grid_map[j].size())
         k = grid_map[j][m]
         g[j], g[k] = g[k], g[j]
     return g
@@ -305,9 +338,9 @@ cpdef np.ndarray shuffle_square(np.ndarray[DTYPE_t, ndim = 1] f):
     cdef np.ndarray[DTYPE_t, ndim = 1] g, g1, g2
     cdef int a, b, k
     g = f.copy()
-    k = rng.integers(2, 5)
-    a = rng.integers(r-k)
-    b = rng.integers(c-k)
+    k = 2 + randrange(3)
+    a = randrange(r-k)
+    b = randrange(c-k)
     g1 = (np.arange(a, a+k, dtype = DTYPE).reshape((k, 1)) * c + np.arange(b, b+k, dtype = DTYPE).reshape((1, k))).reshape(-1)
     g2 = g1.copy()
     np.random.shuffle(g1)
@@ -362,8 +395,7 @@ cpdef np.ndarray force_next(np.ndarray[DTYPE_t, ndim = 1] f):
                             m = mi
                             ii = iii
                     with gil:
-                        j = rng.integers(m)
-                        a = second[ii][j]
+                        a = second[ii][randrange(m)]
                         g[a] = i
                         return g
                 current += 1
@@ -371,6 +403,73 @@ cpdef np.ndarray force_next(np.ndarray[DTYPE_t, ndim = 1] f):
                     check[j] = 0
                 if top <= bound_10:
                     first.push_back(new_que)
+    return f # just in case
+
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
+cdef int choose(vector[int] pool):
+    cdef int n = pool.size()
+    cdef int k = randrange(n)
+    return pool[k]
+
+@cython.boundscheck(False) # turn off bounds-checking for entire function
+@cython.wraparound(False)  # turn off negative index wrapping for entire function
+cpdef np.ndarray force_next2(np.ndarray[DTYPE_t, ndim = 1] f):
+    cdef int current, x, nx, top, j, mx
+    cdef size_t i, ii, iii, m, mi, a, s
+    cdef np.ndarray[DTYPE_t, ndim = 1] g
+    cdef vector[vector[int]] first, second
+    cdef vector[int] que, new_que
+    cdef int[112] check
+    first = [[] for j in range(10)]
+    g = f.copy()
+    for x in range(rc):
+        first[f[x]].push_back(x)
+    for j in range(10):
+        if not first[j].size():
+            return rng.integers(10, size = rc)
+
+    for j in range(rc): check[j] = 0
+    current = 9
+    for top in range(1, bound_by_global_max):
+        second = [[] for i in range(10)]
+        que = first[top]
+        s = 0
+        for j in que:
+            for nx in grid_map[j]:
+                if check[nx] == 0:
+                    s += 1
+                    second[f[nx]].push_back(nx)
+                    check[nx] = 1
+        if s <= 10:
+            mx = choose(first[top//10])
+            new_que = grid_map[mx]
+            a = choose(new_que)
+            g[a] = top % 10
+            return g
+        for i in range(10):
+            new_que = second[i]
+            if new_que.size() == 0:
+                mx = randrange(2)
+                if mx == 0:
+                    mx = choose(que)
+                    new_que = grid_map[mx]
+                    a = choose(new_que)
+                    g[a] = top % 10
+                    return g
+                m = 0
+                for iii in range(10):
+                    mi = second[iii].size()
+                    if mi > m:
+                        m = mi
+                        ii = iii
+                a = second[ii][randrange(m)]
+                g[a] = i
+                return g
+            for j in new_que:
+                check[j] = 0
+            if top <= bound_10:
+                first.push_back(new_que)
     return f # just in case
 
 @cython.boundscheck(False) # turn off bounds-checking for entire function
@@ -388,7 +487,7 @@ cpdef np.ndarray another_template(np.ndarray[DTYPE_t, ndim = 1] f):
     return h
 
 
-table = [(mutate_some, 0.1 ), (apply_permutation, 0.4), (mutate_more, 0.6), (push_some_row, 1.0), (force_next, 1.),
+table = [(mutate_some, 0.1 ), (apply_permutation, 0.4), (mutate_more, 0.6), (push_some_row, 1.0), (force_next, .5), (force_next2, .5),
          (shuffle_square, 1.4), (swap_in_col, .5), (swap_in_row, .5), (swap_next, .5), (random_balance, .5), (another_template, .5)]
 
 # List of functions which takes 2 arguments
@@ -401,8 +500,8 @@ cpdef np.ndarray split_row(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_t, 
     cdef int a, b, i, j, x, y
     h = f.copy()
     view = h
-    a = rng.integers(2)
-    b = rng.integers(1, c)
+    a = randrange(2)
+    b = 1 + randrange(c-1)
     if a == 0:
         x, y = b, c
     else:
@@ -420,8 +519,8 @@ cpdef np.ndarray split_col(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_t, 
     cdef lld[:] view
     h = f.copy()
     view = h
-    a = rng.integers(2)
-    b = rng.integers(1, r)*c
+    a = randrange(2)
+    b = (1 + randrange(r-1))*c
     if a == 0:
         x, y = b, rc
     else:
@@ -439,7 +538,7 @@ cpdef np.ndarray flavor(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_t, ndi
     cdef lld[:] view
     h = f.copy()
     view = h
-    b = rng.integers(rc)
+    b = randrange(rc)
     x = rng.integers(r, size = c)
     for i in range(c):
         a = c*x[i]+i+b
@@ -452,15 +551,15 @@ cpdef np.ndarray flavor(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_t, ndi
 cpdef np.ndarray replace_rect(np.ndarray[DTYPE_t, ndim = 1] f, np.ndarray[DTYPE_t, ndim = 1] g):
     cdef np.ndarray[DTYPE_t, ndim = 1] h, g1, g2
     cdef int a, b, k, i
-    k = rng.integers(2, 5)
-    a = rng.integers(r-k)
-    b = rng.integers(c-k)
+    k = 2 + randrange(3)
+    a = randrange(r-k)
+    b = randrange(c-k)
     g1 = (np.arange(a, a+k, dtype = DTYPE).reshape((k, 1)) * c + np.arange(b, b+k, dtype = DTYPE).reshape((1, k))).reshape(-1)
-    a = rng.integers(r-k)
-    b = rng.integers(c-k)
+    a = randrange(r-k)
+    b = randrange(c-k)
     g2 = (np.arange(a, a+k, dtype = DTYPE).reshape((k, 1)) * c + np.arange(b, b+k, dtype = DTYPE).reshape((1, k))).reshape(-1)
     np.random.shuffle(g2)
-    i = rng.integers(2)
+    i = randrange(2)
     if i == 0:
         h = f.copy()
         h[g1] = g[g2]
@@ -564,7 +663,7 @@ cdef class Race:
 
     cdef void progress(self):
         cdef set new_population
-        cdef int t, a, n = 200, best_ = 150, survives_ = 750, rands_ = 100
+        cdef int t, a, n = 200, best_ = 75, survives_ = 825, rands_ = 100
         cdef list p_list, q, generators, generators2
         cdef np.ndarray[np.double_t, ndim = 1] prob
         cdef np.ndarray[DTYPE_t, ndim = 1] tmp2
@@ -650,7 +749,7 @@ cdef class Race:
         for i in range(1000 - n):
             self.population.append(fully_new())
 
-    cdef void grow(self, uint epoch, int thres = 1000, uint show = 10, uint save_period = 200):
+    cpdef void grow(self, uint epoch, int thres = 1000, uint show = 10, uint save_period = 200):
         cdef uint it
         cdef Individual x
         cdef double check
@@ -660,7 +759,7 @@ cdef class Race:
             self.progress()
 
             if it % show == 0:
-                print(f"epoch = {it:<5}|max_score = {self.max_:<4}|elapsed = {time() - check:.2f}s|num = {len(self.population)}")
+                print(f"epoch = {it:<5}|max_score = {self.max_:<4}|elapsed = {round(time() - check, 2):<5}s|num = {len(self.population)}")
                 if it % save_period == 0:
                     self.population.sort(reverse = True)
                     self.cutoff(thres)
