@@ -228,7 +228,7 @@ cpdef np.ndarray read_from_file():
     cdef int j
     cdef np.ndarray[DTYPE_t, ndim = 1] two
     if frag_len == 0:
-        return fully_new()
+        return rng.integers(10, size = rc) # fully new
     j = randrange(frag_len)
     use = frag_path[j]
     with open(os.path.join(foldername, use), 'r') as file:
