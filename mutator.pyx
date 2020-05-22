@@ -1,4 +1,5 @@
-# distutils: language=c++
+#cython: language_level=3
+#distutils: language=c++
 
 
 import xxhash
@@ -759,7 +760,7 @@ cdef class Race:
             self.progress()
 
             if it % show == 0:
-                print(f"epoch = {it:<5}|max_score = {self.max_:<4}|elapsed = {round(time() - check, 2):<5}s|num = {len(self.population)}")
+                print(f"epoch = {it:<5}|max_score = {self.max_:<4}|elapsed = {round(time() - check, 2):>5}s|num = {len(self.population)}")
                 if it % save_period == 0:
                     self.population.sort(reverse = True)
                     self.cutoff(thres)
